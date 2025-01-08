@@ -1,0 +1,167 @@
+import bpy
+import os
+import bmesh
+from bpy.types import Panel, Operator, PropertyGroup
+from bpy.props import StringProperty, BoolProperty, EnumProperty, PointerProperty, FloatProperty
+from mathutils import Vector
+import random
+
+# Neue Property-Gruppe für die Teileauswahl
+class DayZPartAssignment(PropertyGroup):
+    part_type: EnumProperty(
+        name="Teiletyp",
+        items=[
+            ('wheel_1_1', "Vorderes linkes Rad", ""),
+            ('wheel_1_2', "Vorderes rechtes Rad", ""),
+            ('wheel_2_1', "Hinteres linkes Rad", ""),
+            ('wheel_2_2', "Hinteres rechtes Rad", ""),
+            ('door_1_1', "Fahrertür", ""),
+            ('door_2_1', "Beifahrertür", ""),
+            ('door_1_2', "Linke hintere Tür", ""),
+            ('door_2_2', "Rechte hintere Tür", ""),
+            ('hood', "Motorhaube", ""),
+            ('trunk', "Kofferraum", "")
+        ],
+        default='wheel_1_1'
+    )
+
+# Operator für die Teile-Zuordnung
+class DAYZ_OT_assign_part(Operator):
+    bl_idname = "dayz.assign_part"
+    bl_label = "Teil zuordnen"
+    bl_description = "Ordnet das ausgewählte Objekt als Fahrzeugteil zu"
+    
+    def execute(self, context):
+        settings = context.scene.dayz_vehicle_settings
+        part_settings = context.scene.dayz_part_assignment
+        
+        # Prüfen ob ein Objekt ausgewählt ist
+        if not context.active_object:
+            self.report({'ERROR'}, "Kein Objekt ausgewählt!")
+            return {'CANCELLED'}
+            
+        obj = context.active_object
+        part_type = part_settings.part_type
+        
+        # Objekt umbenennen
+        obj.name = part_type
+        
+        # Proxy-Position erstellen
+        proxy_loc = obj.location.copy()
+        proxy_rot = obj.rotation_euler.copy()
+        
+        # Proxy Collection finden oder erstellen
+        proxy_col_name = f"proxy_{part_type}"
+        collections = bpy.data.collections
+        if proxy_col_name not in collections:
+            proxy_col = bpy.data.collections.new(proxy_col_name)
+            context.scene.collection.children.link(proxy_col)
+        else:
+            proxy_col = collections[proxy_col_name]
+        
+        # Proxy Objekt erstellen
+        proxy_mesh = obj.data.copy()
+        proxy_obj = bpy.data.objects.new(f"proxy_{part_type}", proxy_mesh)
+        proxy_obj.location = proxy_loc
+        proxy_obj.rotation_euler = proxy_rot
+        proxy_col.objects.link(proxy_obj)
+        
+        self.report({'INFO'}, f"Teil als {part_type} zugeordnet und Proxy erstellt")
+        return {'FINISHED'}
+
+# Operator für die Erstellung beschädigter Teile
+class DAYZ_OT_create_damaged(Operator):
+    bl_idname = "dayz.create_damaged"
+    bl_label = "Beschädigtes Teil erstellen"
+    bl_description = "Erstellt eine beschädigte Version des ausgewählten Teils"
+    
+    def deform_mesh(self, obj, damage_amount=0.3):
+        # Mesh in BMesh konvertieren
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        
+        # Zufällige Verformung
+        for v in bm.verts:
+            # Zufällige Verschiebung in X, Y, Z
+            random_vector = Vector((
+                random.uniform(-1, 1),
+                random.uniform(-1, 1),
+                random.uniform(-1, 1)
+            )) * damage_amount
+            
+            v.co += random_vector
+        
+        # BMesh zurück zum Mesh konvertieren
+        bm.to_mesh(obj.data)
+        bm.free()
+    
+    def execute(self, context):
+        if not context.active_object:
+            self.report({'ERROR'}, "Kein Objekt ausgewählt!")
+            return {'CANCELLED'}
+            
+        obj = context.active_object
+        settings = context.scene.dayz_vehicle_settings
+        
+        # Beschädigtes Objekt erstellen
+        damaged_mesh = obj.data.copy()
+        damaged_obj = bpy.data.objects.new(f"damaged_{obj.name}", damaged_mesh)
+        damaged_obj.location = obj.location
+        damaged_obj.rotation_euler = obj.rotation_euler
+        
+        # Collection für beschädigte Teile finden oder erstellen
+        damaged_col_name = "damaged_parts"
+        if damaged_col_name not in bpy.data.collections:
+            damaged_col = bpy.data.collections.new(damaged_col_name)
+            context.scene.collection.children.link(damaged_col)
+        else:
+            damaged_col = bpy.data.collections[damaged_col_name]
+        
+        damaged_col.objects.link(damaged_obj)
+        
+        # Mesh verformen
+        self.deform_mesh(damaged_obj, settings.damage_level)
+        
+        self.report({'INFO'}, f"Beschädigte Version von {obj.name} erstellt")
+        return {'FINISHED'}
+
+# Panel-Erweiterung
+class DAYZ_PT_part_assignment(Panel):
+    bl_label = "Teile Zuordnung"
+    bl_idname = "DAYZ_PT_part_assignment"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'DayZ Tools'
+    bl_order = 1
+    
+    def draw(self, context):
+        layout = self.layout
+        part_settings = context.scene.dayz_part_assignment
+        
+        box = layout.box()
+        box.label(text="Teil zuordnen:")
+        box.prop(part_settings, "part_type")
+        box.operator("dayz.assign_part", text="Als Teil zuordnen", icon='OBJECT_DATA')
+        
+        layout.separator()
+        
+        box = layout.box()
+        box.label(text="Beschädigung:")
+        box.operator("dayz.create_damaged", text="Beschädigtes Teil erstellen", icon='MODIFIER')
+
+# Register-Funktion erweitern
+def register():
+    bpy.utils.register_class(DayZPartAssignment)
+    bpy.utils.register_class(DAYZ_OT_assign_part)
+    bpy.utils.register_class(DAYZ_OT_create_damaged)
+    bpy.utils.register_class(DAYZ_PT_part_assignment)
+    bpy.types.Scene.dayz_part_assignment = PointerProperty(type=DayZPartAssignment)
+    # [Bestehende Register-Aufrufe...]
+
+def unregister():
+    del bpy.types.Scene.dayz_part_assignment
+    bpy.utils.unregister_class(DAYZ_PT_part_assignment)
+    bpy.utils.unregister_class(DAYZ_OT_create_damaged)
+    bpy.utils.unregister_class(DAYZ_OT_assign_part)
+    bpy.utils.unregister_class(DayZPartAssignment)
+    # [Bestehende Unregister-Aufrufe...]
