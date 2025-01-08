@@ -1,164 +1,342 @@
-
-# DayZ Fahrzeug-Generator-Addon
-# Unterstützt: Erstellung von zerstörten Reifen, beschädigten Teilen, RVMAT-Dateien und verschiedenen Geometrie-Typen
-# Sprache: Deutsch
 import bpy
 import os
-from bpy.props import StringProperty, EnumProperty
-import bmesh
+from bpy.types import Panel, Operator, PropertyGroup
+from bpy.props import StringProperty, BoolProperty, EnumProperty, PointerProperty, FloatProperty
 
 bl_info = {
-    "name": "DayZ Fahrzeug-Generator",
-    "author": "DeinName",
-    "version": (1, 5),
-    "blender": (3, 0, 0),
-    "location": "3D-Ansicht > Seitenleiste > DayZ Tools",
-    "description": "Erstellt DayZ-Fahrzeuge, zerstörte Reifen, beschädigte Teile, RVMAT-Dateien und Geometrien",
-    "category": "Objekt",
+    "name": "DayZ Fahrzeug Generator Professional",
+    "author": "Assistant",
+    "version": (2, 0),
+    "blender": (2, 80, 0),
+    "location": "3D-Ansicht > Seitenleiste > DayZ Werkzeuge",
+    "description": "Professioneller DayZ Fahrzeug Generator mit erweiterten Funktionen",
+    "category": "Object",
 }
 
-# Operator: Hauptfahrzeug erstellen
-class DAYZ_OT_CreateVehicleBase(bpy.types.Operator):
-    bl_idname = "dayz.create_vehicle_base"
-    bl_label = "Hauptfahrzeug erstellen"
-    bl_description = "Erstellt ein Fahrzeug mit Karosserie und Rädern"
-    bl_options = {'REGISTER', 'UNDO'}
+class DayZVehicleSettings(PropertyGroup):
+    vehicle_name: StringProperty(
+        name="Fahrzeugname",
+        description="Name des zu erstellenden Fahrzeugs",
+        default="Vehicle"
+    )
+    
+    vehicle_type: EnumProperty(
+        name="Fahrzeugtyp",
+        items=[
+            ('PKW', "PKW", "Normales Auto"),
+            ('SUV', "SUV/Geländewagen", "Sport Utility Vehicle"),
+            ('PICKUP', "Pickup", "Pickup-Truck"),
+            ('LKW', "LKW", "Lastkraftwagen"),
+            ('BUS', "Bus", "Bus oder Kleinbus")
+        ],
+        default='PKW'
+    )
+    
+    auto_setup: BoolProperty(
+        name="Automatisches Setup",
+        description="Automatisch Teile erkennen und einrichten",
+        default=True
+    )
+    
+    create_proxies: BoolProperty(
+        name="Proxies erstellen",
+        description="Erstellt Proxy-Objekte für zerstörbare Teile",
+        default=True
+    )
+    
+    generate_configs: BoolProperty(
+        name="Konfigurationen erstellen",
+        description="Erstellt config.cpp und model.cfg",
+        default=True
+    )
+    
+    damage_level: FloatProperty(
+        name="Beschädigungsgrad",
+        description="Stärke der Beschädigung (0.1 = wenig, 1.0 = stark)",
+        min=0.1,
+        max=1.0,
+        default=0.3
+    )
 
-    def execute(self, context):
-        # Karosserie hinzufügen
-        bpy.ops.mesh.primitive_cube_add(size=2, location=(0, 0, 1))
-        car_body = bpy.context.object
-        car_body.name = "Source_Car_Body"
-
-        # Räder hinzufügen
-        wheel_positions = [
-            (-1.5, 1.5, 0.5),  # Vorderachse links
-            (-1.5, -1.5, 0.5), # Vorderachse rechts
-            (1.5, 1.5, 0.5),   # Hinterachse links
-            (1.5, -1.5, 0.5),  # Hinterachse rechts
+class DAYZ_OT_setup_vehicle(Operator):
+    bl_idname = "dayz.setup_vehicle"
+    bl_label = "Fahrzeug einrichten"
+    bl_description = "Richtet das ausgewählte Fahrzeug für DayZ ein"
+    
+    def create_collections(self, context):
+        settings = context.scene.dayz_vehicle_settings
+        vehicle_name = settings.vehicle_name
+        
+        # Hauptkollektion erstellen
+        main_col = bpy.data.collections.new(vehicle_name)
+        context.scene.collection.children.link(main_col)
+        
+        # Basis-Collections
+        base_collections = [
+            "0.000",
+            "Geometry",
+            "Memory",
+            "View_Geometry",
+            "Fire_Geometry"
         ]
-        for i, pos in enumerate(wheel_positions):
-            bpy.ops.mesh.primitive_cylinder_add(radius=0.5, depth=0.3, location=pos)
-            wheel = bpy.context.object
-            wheel.name = f"Rad_{i+1}"
-
-        self.report({'INFO'}, "Hauptfahrzeug erstellt!")
-        return {'FINISHED'}
-
-# Operator: Memory Points hinzufügen
-class DAYZ_OT_AddMemoryPoints(bpy.types.Operator):
-    bl_idname = "dayz.add_memory_points"
-    bl_label = "Memory Points hinzufügen"
-    bl_description = "Fügt Memory Points für DayZ-Fahrzeuge hinzu"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def execute(self, context):
+        
+        collections_dict = {}
+        # Basis-Collections erstellen
+        for col_name in base_collections:
+            col = bpy.data.collections.new(col_name)
+            main_col.children.link(col)
+            collections_dict[col_name] = col
+            
+        # Proxy-Collections erstellen
+        proxy_collections = [
+            "proxy_door_1_1",
+            "proxy_door_2_1",
+            "proxy_door_1_2",
+            "proxy_door_2_2",
+            "proxy_hood",
+            "proxy_trunk",
+            "proxy_wheel_1_1",
+            "proxy_wheel_1_2",
+            "proxy_wheel_2_1",
+            "proxy_wheel_2_2"
+        ]
+        
+        for proxy_name in proxy_collections:
+            col = bpy.data.collections.new(proxy_name)
+            main_col.children.link(col)
+            collections_dict[proxy_name] = col
+            
+        return collections_dict
+    
+    def create_memory_points(self, context, collections):
         memory_points = {
-            "dial_speed": (0.5, 0.3, 1.5),
-            "dial_rpm": (0.5, 0.6, 1.5),
-            "dial_fuel": (-0.5, 0.3, 1.5),
-            "dial_temp": (-0.5, 0.6, 1.5),
-            "drivewheel": (0, 0, 1.8),
-            "CrewDriver": (0.8, 0.5, 1.3),
-            "CrewCoDriver": (-0.8, 0.5, 1.3),
-            "seat_driver": (0.8, 0.5, 1.3),
-            "seat_codriver": (-0.8, 0.5, 1.3),
-            "wheel_1_1_damper": (-1.5, 1.5, 0.5),
-            "wheel_1_2_damper": (-1.5, -1.5, 0.5),
-            "wheel_2_1_damper": (1.5, 1.5, 0.5),
-            "wheel_2_2_damper": (1.5, -1.5, 0.5),
-            "doors_driver": (1.2, 0.7, 1.3),
-            "doors_codriver": (-1.2, 0.7, 1.3),
-            "doors_hood": (0, 1.8, 1.2),
-            "doors_trunk": (0, -1.8, 1.2),
-            "radiator": (0, 1.5, 0.5),
-            "battery": (0.5, 1.5, 0.3),
-            "sparkplug": (-0.5, 1.5, 0.3),
-            "engine": (0, 0, 0.5)
+            # Anzeigen
+            "dial_speed": {"pos": (0, 0, 1), "type": "display"},
+            "dial_rpm": {"pos": (0.1, 0, 1), "type": "display"},
+            "dial_fuel": {"pos": (-0.1, 0, 1), "type": "display"},
+            "dial_temp": {"pos": (0.2, 0, 1), "type": "display"},
+            
+            # Sitze
+            "pos_driver": {"pos": (-0.4, 0, 0.5), "type": "seat"},
+            "pos_codriver": {"pos": (0.4, 0, 0.5), "type": "seat"},
+            "pos_cargo1": {"pos": (-0.4, -1, 0.5), "type": "seat"},
+            "pos_cargo2": {"pos": (0.4, -1, 0.5), "type": "seat"},
+            
+            # Beschädigungspunkte
+            "dmg_wheel_1_1": {"pos": (-0.8, 1.2, 0.3), "type": "damage"},
+            "dmg_wheel_1_2": {"pos": (-0.8, -1.2, 0.3), "type": "damage"},
+            "dmg_wheel_2_1": {"pos": (0.8, 1.2, 0.3), "type": "damage"},
+            "dmg_wheel_2_2": {"pos": (0.8, -1.2, 0.3), "type": "damage"}
         }
+        
+        for name, data in memory_points.items():
+            empty = bpy.data.objects.new(name=name, object_data=None)
+            empty.empty_display_type = 'PLAIN_AXES'
+            empty.location = data["pos"]
+            collections["Memory"].objects.link(empty)
+    
+    def setup_vehicle_parts(self, context, collections):
+        settings = context.scene.dayz_vehicle_settings
+        
+        # Standardteile mit korrekter Platzierung
+        parts = {
+            "Geometry": [
+                {"name": "wheel_1_1", "type": "mesh"},
+                {"name": "wheel_1_2", "type": "mesh"},
+                {"name": "wheel_2_1", "type": "mesh"},
+                {"name": "wheel_2_2", "type": "mesh"},
+                {"name": "door_1_1", "type": "mesh"},
+                {"name": "door_2_1", "type": "mesh"},
+                {"name": "hood", "type": "mesh"},
+                {"name": "trunk", "type": "mesh"}
+            ]
+        }
+        
+        # Proxy-Teile definieren
+        proxy_parts = {
+            "proxy_door_1_1": [{"name": "proxy_door_1_1", "type": "mesh"}],
+            "proxy_door_2_1": [{"name": "proxy_door_2_1", "type": "mesh"}],
+            "proxy_door_1_2": [{"name": "proxy_door_1_2", "type": "mesh"}],
+            "proxy_door_2_2": [{"name": "proxy_door_2_2", "type": "mesh"}],
+            "proxy_hood": [{"name": "proxy_hood", "type": "mesh"}],
+            "proxy_trunk": [{"name": "proxy_trunk", "type": "mesh"}],
+            "proxy_wheel_1_1": [{"name": "proxy_wheel_1_1", "type": "mesh"}],
+            "proxy_wheel_1_2": [{"name": "proxy_wheel_1_2", "type": "mesh"}],
+            "proxy_wheel_2_1": [{"name": "proxy_wheel_2_1", "type": "mesh"}],
+            "proxy_wheel_2_2": [{"name": "proxy_wheel_2_2", "type": "mesh"}]
+        }
+        
+        # Standardteile erstellen
+        for collection_name, parts_list in parts.items():
+            if collection_name in collections:
+                for part in parts_list:
+                    if part["type"] == "mesh":
+                        mesh = bpy.data.meshes.new(name=part["name"])
+                        obj = bpy.data.objects.new(part["name"], mesh)
+                    else:  # empty
+                        obj = bpy.data.objects.new(name=part["name"], object_data=None)
+                        obj.empty_display_type = 'PLAIN_AXES'
+                    
+                    collections[collection_name].objects.link(obj)
+        
+        # Proxy-Teile erstellen
+        if settings.create_proxies:
+            for collection_name, parts_list in proxy_parts.items():
+                if collection_name in collections:
+                    for part in parts_list:
+                        mesh = bpy.data.meshes.new(name=part["name"])
+                        obj = bpy.data.objects.new(part["name"], mesh)
+                        collections[collection_name].objects.link(obj)
+    
+    def create_config_files(self, context):
+        settings = context.scene.dayz_vehicle_settings
+        vehicle_name = settings.vehicle_name
+        
+        # Config.cpp erstellen
+        config_content = f"""class CfgPatches
+{{
+    class {vehicle_name}
+    {{
+        units[] = {{}};
+        weapons[] = {{}};
+        requiredVersion = 0.1;
+        requiredAddons[] = {{"DZ_Vehicles_Parts"}};
+    }};
+}};
 
-        for name, loc in memory_points.items():
-            bpy.ops.object.empty_add(type='PLAIN_AXES', location=loc)
-            point = bpy.context.object
-            point.name = f"Memory_{name}"
+class CfgVehicles
+{{
+    class CarScript;
+    class {vehicle_name}: CarScript
+    {{
+        scope = 2;
+        displayName = "{vehicle_name}";
+        model = "\\{vehicle_name}\\{vehicle_name}.p3d";
+        
+        class DamageSystem
+        {{
+            class GlobalHealth
+            {{
+                class Health
+                {{
+                    hitpoints = 1000;
+                }};
+            }};
+        }};
+    }};
+}};"""
+        
+        # Model.cfg erstellen
+        model_content = f"""class CfgSkeletons
+{{
+    class {vehicle_name}_Skeleton
+    {{
+        isDiscrete = 1;
+        skeletonInherit = "";
+        skeletonBones[] = 
+        {{
+            "wheel_1_1","",
+            "wheel_1_2","",
+            "wheel_2_1","",
+            "wheel_2_2","",
+            "door_1_1","",
+            "door_2_1",""
+        }};
+    }};
+}};
 
-        self.report({'INFO'}, "Memory Points hinzugefügt!")
-        return {'FINISHED'}
-
-# Operator: Geometrien erstellen (Geometry, View Geometry, Fire Geometry)
-class DAYZ_OT_CreateGeometries(bpy.types.Operator):
-    bl_idname = "dayz.create_geometries"
-    bl_label = "Geometrien erstellen"
-    bl_description = "Erstellt Geometrien: Haupt-, Sicht- und Feuerschutzgeometrie"
-    bl_options = {'REGISTER', 'UNDO'}
-
+class CfgModels
+{{
+    class {vehicle_name}
+    {{
+        skeletonName = "{vehicle_name}_Skeleton";
+        sections[] = 
+        {{
+            "lights",
+            "reflectors",
+            "wheels",
+            "doors"
+        }};
+    }};
+}};"""
+        
+        # Dateien speichern
+        filepath = os.path.dirname(bpy.data.filepath)
+        if filepath:
+            with open(os.path.join(filepath, "config.cpp"), 'w') as f:
+                f.write(config_content)
+                
+            with open(os.path.join(filepath, "model.cfg"), 'w') as f:
+                f.write(model_content)
+    
     def execute(self, context):
-        geometry_types = ["Geometry", "ViewGeometry", "FireGeometry"]
-        base_object = bpy.context.object
+        try:
+            # Collections erstellen
+            collections = self.create_collections(context)
+            
+            # Memory Points erstellen
+            self.create_memory_points(context, collections)
+            
+            # Fahrzeugteile erstellen und einordnen
+            self.setup_vehicle_parts(context, collections)
+            
+            # Konfigurationsdateien erstellen
+            if context.scene.dayz_vehicle_settings.generate_configs:
+                self.create_config_files(context)
+            
+            self.report({'INFO'}, "Fahrzeug erfolgreich eingerichtet!")
+            return {'FINISHED'}
+            
+        except Exception as e:
+            self.report({'ERROR'}, f"Fehler beim Einrichten: {str(e)}")
+            return {'CANCELLED'}
 
-        for geom_type in geometry_types:
-            bpy.ops.object.duplicate()
-            geom = bpy.context.object
-            geom.name = f"{base_object.name}_{geom_type}"
-            geom.location.x += 2  # Verschieben für Übersichtlichkeit
-
-        self.report({'INFO'}, "Geometrien erstellt!")
-        return {'FINISHED'}
-
-# Operator: Zerstörte Reifen erstellen
-class DAYZ_OT_CreateDestroyedTires(bpy.types.Operator):
-    bl_idname = "dayz.create_destroyed_tires"
-    bl_label = "Zerstörte Reifen erstellen"
-    bl_description = "Erstellt zerstörte Reifenmodelle"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def execute(self, context):
-        selected_objects = bpy.context.selected_objects
-
-        for obj in selected_objects:
-            if obj.type == 'MESH' and "Rad" in obj.name:
-                bpy.ops.object.duplicate()
-                destroyed_tire = bpy.context.object
-                destroyed_tire.name = f"{obj.name}_Zerstört"
-
-                bpy.ops.object.mode_set(mode='EDIT')
-                bpy.ops.transform.vertex_random(offset=0.1)
-                bpy.ops.object.mode_set(mode='OBJECT')
-
-        self.report({'INFO'}, "Zerstörte Reifen erstellt!")
-        return {'FINISHED'}
-
-# Panel: DayZ Tools
-class DAYZ_PT_ToolsPanel(bpy.types.Panel):
-    bl_label = "DayZ Tools"
-    bl_idname = "DAYZ_PT_ToolsPanel"
+class DAYZ_PT_main_panel(Panel):
+    bl_label = "DayZ Fahrzeug Generator"
+    bl_idname = "DAYZ_PT_main_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = 'DayZ Tools'
-
+    
     def draw(self, context):
         layout = self.layout
-        layout.operator("dayz.create_vehicle_base", text="Hauptfahrzeug erstellen")
-        layout.operator("dayz.add_memory_points", text="Memory Points hinzufügen")
-        layout.operator("dayz.create_geometries", text="Geometrien erstellen")
-        layout.operator("dayz.create_destroyed_tires", text="Zerstörte Reifen erstellen")
-
-# Registrierung der Klassen
-classes = (
-    DAYZ_OT_CreateVehicleBase,
-    DAYZ_OT_AddMemoryPoints,
-    DAYZ_OT_CreateGeometries,
-    DAYZ_OT_CreateDestroyedTires,
-    DAYZ_PT_ToolsPanel,
-)
+        settings = context.scene.dayz_vehicle_settings
+        
+        # Fahrzeugname Eingabe
+        box = layout.box()
+        box.label(text="Fahrzeugeinstellungen:")
+        box.prop(settings, "vehicle_name")
+        box.prop(settings, "vehicle_type")
+        
+        # Grundeinstellungen
+        box = layout.box()
+        box.label(text="Grundeinstellungen:")
+        box.prop(settings, "auto_setup")
+        box.prop(settings, "create_proxies")
+        
+        # Erweiterte Einstellungen
+        box = layout.box()
+        box.label(text="Erweiterte Einstellungen:")
+        box.prop(settings, "generate_configs")
+        box.prop(settings, "damage_level")
+        
+        # Setup Button
+        layout.separator()
+        row = layout.row()
+        row.scale_y = 2.0
+        row.operator("dayz.setup_vehicle", text="Fahrzeug einrichten", icon='AUTO')
 
 def register():
-    for cls in classes:
-        bpy.utils.register_class(cls)
+    bpy.utils.register_class(DayZVehicleSettings)
+    bpy.utils.register_class(DAYZ_OT_setup_vehicle)
+    bpy.utils.register_class(DAYZ_PT_main_panel)
+    bpy.types.Scene.dayz_vehicle_settings = PointerProperty(type=DayZVehicleSettings)
 
 def unregister():
-    for cls in classes:
-        bpy.utils.unregister_class(cls)
+    del bpy.types.Scene.dayz_vehicle_settings
+    bpy.utils.unregister_class(DAYZ_PT_main_panel)
+    bpy.utils.unregister_class(DAYZ_OT_setup_vehicle)
+    bpy.utils.unregister_class(DayZVehicleSettings)
 
 if __name__ == "__main__":
     register()
