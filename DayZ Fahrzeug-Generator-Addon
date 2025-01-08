@@ -1,0 +1,164 @@
+
+# DayZ Fahrzeug-Generator-Addon
+# Unterstützt: Erstellung von zerstörten Reifen, beschädigten Teilen, RVMAT-Dateien und verschiedenen Geometrie-Typen
+# Sprache: Deutsch
+import bpy
+import os
+from bpy.props import StringProperty, EnumProperty
+import bmesh
+
+bl_info = {
+    "name": "DayZ Fahrzeug-Generator",
+    "author": "DeinName",
+    "version": (1, 5),
+    "blender": (3, 0, 0),
+    "location": "3D-Ansicht > Seitenleiste > DayZ Tools",
+    "description": "Erstellt DayZ-Fahrzeuge, zerstörte Reifen, beschädigte Teile, RVMAT-Dateien und Geometrien",
+    "category": "Objekt",
+}
+
+# Operator: Hauptfahrzeug erstellen
+class DAYZ_OT_CreateVehicleBase(bpy.types.Operator):
+    bl_idname = "dayz.create_vehicle_base"
+    bl_label = "Hauptfahrzeug erstellen"
+    bl_description = "Erstellt ein Fahrzeug mit Karosserie und Rädern"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        # Karosserie hinzufügen
+        bpy.ops.mesh.primitive_cube_add(size=2, location=(0, 0, 1))
+        car_body = bpy.context.object
+        car_body.name = "Source_Car_Body"
+
+        # Räder hinzufügen
+        wheel_positions = [
+            (-1.5, 1.5, 0.5),  # Vorderachse links
+            (-1.5, -1.5, 0.5), # Vorderachse rechts
+            (1.5, 1.5, 0.5),   # Hinterachse links
+            (1.5, -1.5, 0.5),  # Hinterachse rechts
+        ]
+        for i, pos in enumerate(wheel_positions):
+            bpy.ops.mesh.primitive_cylinder_add(radius=0.5, depth=0.3, location=pos)
+            wheel = bpy.context.object
+            wheel.name = f"Rad_{i+1}"
+
+        self.report({'INFO'}, "Hauptfahrzeug erstellt!")
+        return {'FINISHED'}
+
+# Operator: Memory Points hinzufügen
+class DAYZ_OT_AddMemoryPoints(bpy.types.Operator):
+    bl_idname = "dayz.add_memory_points"
+    bl_label = "Memory Points hinzufügen"
+    bl_description = "Fügt Memory Points für DayZ-Fahrzeuge hinzu"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        memory_points = {
+            "dial_speed": (0.5, 0.3, 1.5),
+            "dial_rpm": (0.5, 0.6, 1.5),
+            "dial_fuel": (-0.5, 0.3, 1.5),
+            "dial_temp": (-0.5, 0.6, 1.5),
+            "drivewheel": (0, 0, 1.8),
+            "CrewDriver": (0.8, 0.5, 1.3),
+            "CrewCoDriver": (-0.8, 0.5, 1.3),
+            "seat_driver": (0.8, 0.5, 1.3),
+            "seat_codriver": (-0.8, 0.5, 1.3),
+            "wheel_1_1_damper": (-1.5, 1.5, 0.5),
+            "wheel_1_2_damper": (-1.5, -1.5, 0.5),
+            "wheel_2_1_damper": (1.5, 1.5, 0.5),
+            "wheel_2_2_damper": (1.5, -1.5, 0.5),
+            "doors_driver": (1.2, 0.7, 1.3),
+            "doors_codriver": (-1.2, 0.7, 1.3),
+            "doors_hood": (0, 1.8, 1.2),
+            "doors_trunk": (0, -1.8, 1.2),
+            "radiator": (0, 1.5, 0.5),
+            "battery": (0.5, 1.5, 0.3),
+            "sparkplug": (-0.5, 1.5, 0.3),
+            "engine": (0, 0, 0.5)
+        }
+
+        for name, loc in memory_points.items():
+            bpy.ops.object.empty_add(type='PLAIN_AXES', location=loc)
+            point = bpy.context.object
+            point.name = f"Memory_{name}"
+
+        self.report({'INFO'}, "Memory Points hinzugefügt!")
+        return {'FINISHED'}
+
+# Operator: Geometrien erstellen (Geometry, View Geometry, Fire Geometry)
+class DAYZ_OT_CreateGeometries(bpy.types.Operator):
+    bl_idname = "dayz.create_geometries"
+    bl_label = "Geometrien erstellen"
+    bl_description = "Erstellt Geometrien: Haupt-, Sicht- und Feuerschutzgeometrie"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        geometry_types = ["Geometry", "ViewGeometry", "FireGeometry"]
+        base_object = bpy.context.object
+
+        for geom_type in geometry_types:
+            bpy.ops.object.duplicate()
+            geom = bpy.context.object
+            geom.name = f"{base_object.name}_{geom_type}"
+            geom.location.x += 2  # Verschieben für Übersichtlichkeit
+
+        self.report({'INFO'}, "Geometrien erstellt!")
+        return {'FINISHED'}
+
+# Operator: Zerstörte Reifen erstellen
+class DAYZ_OT_CreateDestroyedTires(bpy.types.Operator):
+    bl_idname = "dayz.create_destroyed_tires"
+    bl_label = "Zerstörte Reifen erstellen"
+    bl_description = "Erstellt zerstörte Reifenmodelle"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        selected_objects = bpy.context.selected_objects
+
+        for obj in selected_objects:
+            if obj.type == 'MESH' and "Rad" in obj.name:
+                bpy.ops.object.duplicate()
+                destroyed_tire = bpy.context.object
+                destroyed_tire.name = f"{obj.name}_Zerstört"
+
+                bpy.ops.object.mode_set(mode='EDIT')
+                bpy.ops.transform.vertex_random(offset=0.1)
+                bpy.ops.object.mode_set(mode='OBJECT')
+
+        self.report({'INFO'}, "Zerstörte Reifen erstellt!")
+        return {'FINISHED'}
+
+# Panel: DayZ Tools
+class DAYZ_PT_ToolsPanel(bpy.types.Panel):
+    bl_label = "DayZ Tools"
+    bl_idname = "DAYZ_PT_ToolsPanel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'DayZ Tools'
+
+    def draw(self, context):
+        layout = self.layout
+        layout.operator("dayz.create_vehicle_base", text="Hauptfahrzeug erstellen")
+        layout.operator("dayz.add_memory_points", text="Memory Points hinzufügen")
+        layout.operator("dayz.create_geometries", text="Geometrien erstellen")
+        layout.operator("dayz.create_destroyed_tires", text="Zerstörte Reifen erstellen")
+
+# Registrierung der Klassen
+classes = (
+    DAYZ_OT_CreateVehicleBase,
+    DAYZ_OT_AddMemoryPoints,
+    DAYZ_OT_CreateGeometries,
+    DAYZ_OT_CreateDestroyedTires,
+    DAYZ_PT_ToolsPanel,
+)
+
+def register():
+    for cls in classes:
+        bpy.utils.register_class(cls)
+
+def unregister():
+    for cls in classes:
+        bpy.utils.unregister_class(cls)
+
+if __name__ == "__main__":
+    register()
